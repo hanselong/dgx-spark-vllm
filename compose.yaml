@@ -1,0 +1,94 @@
+services:
+  vllm:
+    build:
+      context: .
+      dockerfile: Dockerfile.vllm
+      args:
+        VLLM_BASE_IMAGE: ${VLLM_BASE_IMAGE:-scitrera/dgx-spark-vllm:0.17.0-t5}
+    image: ${VLLM_IMAGE_NAME:-local/vllm-dgx-spark:latest}
+    container_name: ${VLLM_CONTAINER_NAME:-vllm}
+    restart: unless-stopped
+    ipc: host
+    gpus: all
+    command: ["/usr/local/bin/start-vllm"]
+    environment:
+      HF_HOME: /data/hf
+      HF_HUB_CACHE: /data/hf/hub
+      HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN:-}
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+
+      # Throughput-oriented defaults for NVIDIA Blackwell / GB10.
+      NVIDIA_TF32_OVERRIDE: ${NVIDIA_TF32_OVERRIDE:-1}
+      TORCH_ALLOW_TF32_CUBLAS_OVERRIDE: ${TORCH_ALLOW_TF32_CUBLAS_OVERRIDE:-1}
+      TORCH_CUDA_ARCH_LIST: ${TORCH_CUDA_ARCH_LIST:-12.1f}
+      VLLM_FLOAT32_MATMUL_PRECISION: ${VLLM_FLOAT32_MATMUL_PRECISION:-high}
+      VLLM_FLASHINFER_MOE_BACKEND: ${VLLM_FLASHINFER_MOE_BACKEND:-throughput}
+
+      # Operational defaults.
+      VLLM_ALLOW_LONG_MAX_MODEL_LEN: ${VLLM_ALLOW_LONG_MAX_MODEL_LEN:-1}
+      VLLM_LOG_STATS_INTERVAL: ${VLLM_LOG_STATS_INTERVAL:-10}
+      PYTHONHASHSEED: ${PYTHONHASHSEED:-0}
+
+      # Values consumed by the startup command above.
+      VLLM_MODEL: ${VLLM_MODEL}
+      VLLM_SERVED_MODEL_NAME: ${VLLM_SERVED_MODEL_NAME:-}
+      VLLM_MAX_MODEL_LEN: ${VLLM_MAX_MODEL_LEN:-65536}
+      VLLM_GPU_MEMORY_UTILIZATION: ${VLLM_GPU_MEMORY_UTILIZATION:-0.65}
+      VLLM_MAX_NUM_SEQS: ${VLLM_MAX_NUM_SEQS:-3}
+      VLLM_MAX_NUM_BATCHED_TOKENS: ${VLLM_MAX_NUM_BATCHED_TOKENS:-8192}
+      VLLM_TENSOR_PARALLEL_SIZE: ${VLLM_TENSOR_PARALLEL_SIZE:-1}
+      VLLM_ATTENTION_BACKEND: ${VLLM_ATTENTION_BACKEND:-flashinfer}
+      VLLM_TRUST_REMOTE_CODE: ${VLLM_TRUST_REMOTE_CODE:-true}
+      VLLM_ENABLE_PREFIX_CACHING: ${VLLM_ENABLE_PREFIX_CACHING:-true}
+      VLLM_ENABLE_CHUNKED_PREFILL: ${VLLM_ENABLE_CHUNKED_PREFILL:-true}
+      VLLM_ENABLE_AUTO_TOOL_CHOICE: ${VLLM_ENABLE_AUTO_TOOL_CHOICE:-false}
+      VLLM_TOOL_CALL_PARSER: ${VLLM_TOOL_CALL_PARSER:-}
+      VLLM_REASONING_PARSER: ${VLLM_REASONING_PARSER:-}
+      VLLM_SPECULATIVE_CONFIG: ${VLLM_SPECULATIVE_CONFIG:-}
+      VLLM_MAX_CUDAGRAPH_CAPTURE_SIZE: ${VLLM_MAX_CUDAGRAPH_CAPTURE_SIZE:-}
+      VLLM_KV_CACHE_METRICS: ${VLLM_KV_CACHE_METRICS:-true}
+      VLLM_CUDAGRAPH_METRICS: ${VLLM_CUDAGRAPH_METRICS:-true}
+      VLLM_ENABLE_MFU_METRICS: ${VLLM_ENABLE_MFU_METRICS:-true}
+    volumes:
+      - ./data/hf-cache:/data/hf
+      - ./data/vllm-cache:/root/.cache/vllm
+      - ./data/models:/models:ro
+    ports:
+      - "${VLLM_HOST:-127.0.0.1}:${VLLM_PORT:-8000}:8000"
+    shm_size: ${VLLM_SHM_SIZE:-64gb}
+    mem_limit: ${VLLM_MEM_LIMIT:-110g}
+    memswap_limit: ${VLLM_MEMSWAP_LIMIT:-120g}
+    pids_limit: ${VLLM_PIDS_LIMIT:-4096}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 20
+      start_period: 10m
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  litellm:
+    profiles: ["litellm"]
+    image: ${LITELLM_IMAGE:-docker.litellm.ai/berriai/litellm:main-stable}
+    container_name: ${LITELLM_CONTAINER_NAME:-litellm-vllm}
+    restart: unless-stopped
+    depends_on:
+      vllm:
+        condition: service_healthy
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-change-me}
+      LITELLM_MODEL_NAME: ${LITELLM_MODEL_NAME:-qwen/qwen3-35b-a3b}
+      LITELLM_VLLM_MODEL: ${LITELLM_VLLM_MODEL:-hosted_vllm/qwen/qwen3-35b-a3b}
+    volumes:
+      - ./litellm_config.yaml:/app/config.yaml:ro
+    ports:
+      - "${LITELLM_HOST:-127.0.0.1}:${LITELLM_PORT:-4000}:4000"
+

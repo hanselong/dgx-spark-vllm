@@ -1,0 +1,7 @@
+ARG VLLM_BASE_IMAGE=scitrera/dgx-spark-vllm:0.17.0-t5
+FROM ${VLLM_BASE_IMAGE}
+
+WORKDIR /vllm-workspace
+
+COPY start-vllm.sh /usr/local/bin/start-vllm
+RUN chmod +x /usr/local/bin/start-vllm
